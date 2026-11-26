@@ -139,6 +139,70 @@ class StockWarden_Features {
 		add_filter( 'woocommerce_order_item_quantity', array( __CLASS__, 'note_order' ), 999, 3 );
 		add_action( 'woocommerce_product_set_stock', array( __CLASS__, 'stock_changed' ), 20 );
 		add_action( 'woocommerce_variation_set_stock', array( __CLASS__, 'stock_changed' ), 20 );
+		add_action( 'woocommerce_restore_order_item_stock', array( __CLASS__, 'restored' ), 20, 4 );
+		add_action( 'woocommerce_restock_refunded_item', array( __CLASS__, 'refund_restocked' ), 20, 5 );
+	}
+
+	/**
+	 * Mark the latest change of a product as caused by an order.
+	 *
+	 * @param int $product_id Product.
+	 * @param int $order_id   Order.
+	 * @return void
+	 */
+	private static function relabel( $product_id, $order_id ) {
+		global $wpdb;
+		$table = StockWarden_Log::table();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- own table.
+		$id = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT id FROM %i WHERE object_id = %d AND type = %s AND created_at >= %s ORDER BY id DESC LIMIT 1', $table, $product_id, 'change', gmdate( 'Y-m-d H:i:s', time() - 120 ) ) );
+		if ( $id ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- own table.
+			$wpdb->update(
+				$table,
+				array(
+					'type'    => 'restock_order',
+					'field'   => (string) $order_id,
+					'user_id' => 0,
+				),
+				array( 'id' => $id ),
+				array( '%s', '%s', '%d' ),
+				array( '%d' )
+			);
+		}
+	}
+
+	/**
+	 * Stock given back for a cancelled or failed order line.
+	 *
+	 * @param WC_Order_Item_Product $item      Item.
+	 * @param int|float             $new_stock New stock.
+	 * @param int|float             $old_stock Old stock.
+	 * @param WC_Order              $order     Order.
+	 * @return void
+	 */
+	public static function restored( $item, $new_stock, $old_stock, $order ) {
+		unset( $new_stock, $old_stock );
+		if ( $item instanceof WC_Order_Item_Product && $order instanceof WC_Order ) {
+			self::relabel( $item->get_variation_id() ? $item->get_variation_id() : $item->get_product_id(), $order->get_id() );
+		}
+	}
+
+	/**
+	 * Stock given back with a refund.
+	 *
+	 * @param int        $product_id Product.
+	 * @param int|float  $old_stock  Old.
+	 * @param int|float  $new_stock  New.
+	 * @param WC_Order   $order      Order.
+	 * @param WC_Product $product    Product.
+	 * @return void
+	 */
+	public static function refund_restocked( $product_id, $old_stock, $new_stock, $order, $product = null ) {
+		unset( $old_stock, $new_stock );
+		$id = $product instanceof WC_Product ? $product->get_id() : (int) $product_id;
+		if ( $order instanceof WC_Order ) {
+			self::relabel( $id, $order->get_id() );
+		}
 	}
 
 	/**
@@ -397,7 +461,7 @@ class StockWarden_Features {
 				$out[] = sprintf( __( '%1$s: %2$s left', 'stockwarden' ), $name, wc_stock_amount( $row['qty'] ) );
 			} elseif ( null !== $row['left'] && $row['left'] <= $warn ) {
 				/* translators: 1: product, 2: stock, 3: days */
-				$soon[] = sprintf( __( '%1$s: %2$s left, about %3$s days', 'stockwarden' ), $name, wc_stock_amount( $row['qty'] ), number_format_i18n( $row['left'], 0 ) );
+				$soon[] = sprintf( __( '%1$s: %2$s left, about %3$s days', 'stockwarden' ), $name, wc_stock_amount( $row['qty'] ), number_format_i18n( max( 1, $row['left'] ), 0 ) );
 			} elseif ( $row['low'] ) {
 				/* translators: 1: product, 2: stock */
 				$low[] = sprintf( __( '%1$s: %2$s left', 'stockwarden' ), $name, wc_stock_amount( $row['qty'] ) );
@@ -586,7 +650,7 @@ class StockWarden_Features {
 				'html_item'  => self::link( $r['product'] ),
 				'stock'      => wc_stock_amount( $r['qty'] ),
 				'speed'      => $r['speed'] > 0 ? number_format_i18n( $r['speed'] * 7, 1 ) : '–',
-				'left'       => null !== $r['left'] ? number_format_i18n( $r['left'], 0 ) : '–',
+				'left'       => null === $r['left'] ? '–' : ( $r['left'] < 1 ? '<1' : number_format_i18n( $r['left'], 0 ) ),
 				'html_state' => $state,
 			);
 		}

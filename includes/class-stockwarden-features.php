@@ -322,10 +322,12 @@ class StockWarden_Features {
 	public static function sold( $days = 30 ) {
 		global $wpdb;
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- own table, report.
-		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT object_id, SUM(-amount) AS n FROM %i WHERE type = %s AND created_at >= %s GROUP BY object_id', StockWarden_Log::table(), 'sale', gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS ) ), ARRAY_A );
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT object_id, SUM(-amount) AS n FROM %i WHERE type IN (%s, %s) AND created_at >= %s GROUP BY object_id', StockWarden_Log::table(), 'sale', 'restock_order', gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS ) ), ARRAY_A );
 		$out  = array();
 		foreach ( (array) $rows as $row ) {
-			$out[ (int) $row['object_id'] ] = (float) $row['n'];
+			if ( (float) $row['n'] > 0 ) {
+				$out[ (int) $row['object_id'] ] = (float) $row['n'];
+			}
 		}
 		return $out;
 	}
